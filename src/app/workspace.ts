@@ -29,6 +29,46 @@ import {
 import { waitForHealthy, createClient } from "../lib/opencode";
 import type { Provider } from "@opencode-ai/sdk/v2/client";
 
+// Debounce helper for connect attempts
+let connectDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let lastConnectAttempt: { url: string; directory?: string; at: number } | null = null;
+const CONNECT_DEBOUNCE_MS = 1000;
+const MAX_CONNECT_ATTEMPTS = 3;
+const CONNECT_ATTEMPT_WINDOW_MS = 10000;
+
+function debouncedConnect(
+  nextBaseUrl: string,
+  directory: string | undefined,
+  fn: () => Promise<boolean>,
+): Promise<boolean> {
+  const now = Date.now();
+
+  // Count recent attempts
+  const attempts = lastConnectAttempt &&
+    now - lastConnectAttempt.at < CONNECT_ATTEMPT_WINDOW_MS &&
+    lastConnectAttempt.url === nextBaseUrl
+    ? 1
+    : 0;
+
+  if (attempts >= MAX_CONNECT_ATTEMPTS) {
+    console.warn("Connect debounced: too many rapid attempts");
+    return Promise.resolve(false);
+  }
+
+  if (connectDebounceTimer) {
+    clearTimeout(connectDebounceTimer);
+  }
+
+  return new Promise((resolve) => {
+    connectDebounceTimer = setTimeout(async () => {
+      connectDebounceTimer = null;
+      lastConnectAttempt = { url: nextBaseUrl, directory, at: Date.now() };
+      const result = await fn();
+      resolve(result);
+    }, CONNECT_DEBOUNCE_MS);
+  });
+}
+
 export type WorkspaceStore = ReturnType<typeof createWorkspaceStore>;
 
 export function createWorkspaceStore(options: {
@@ -197,117 +237,154 @@ export function createWorkspaceStore(options: {
   }
 
   async function connectToServer(nextBaseUrl: string, directory?: string) {
-    options.setError(null);
-    options.setBusy(true);
-    options.setBusyLabel("Connecting");
-    options.setBusyStartedAt(Date.now());
-    options.setSseConnected(false);
-
-    try {
-      const nextClient = createClient(nextBaseUrl, directory);
-      const health = await waitForHealthy(nextClient, { timeoutMs: 12_000 });
-
-      options.setClient(nextClient);
-      options.setConnectedVersion(health.version);
-      options.setBaseUrl(nextBaseUrl);
-
-      await options.loadSessions(activeWorkspaceRoot().trim());
-      await options.refreshPendingPermissions();
+    // Use debounced wrapper to prevent connection storms
+    return debouncedConnect(nextBaseUrl, directory, async () => {
+      options.setError(null);
+      options.setBusy(true);
+      options.setBusyLabel("Connecting");
+      options.setBusyStartedAt(Date.now());
+      options.setSseConnected(false);
 
       try {
-        const providerList = unwrap(await nextClient.provider.list());
-        options.setProviders(providerList.all as unknown as Provider[]);
-        options.setProviderDefaults(providerList.default);
-        options.setProviderConnectedIds(providerList.connected);
-      } catch {
-        try {
-          const cfg = unwrap(await nextClient.config.providers());
-          options.setProviders(cfg.providers as unknown as Provider[]);
-          options.setProviderDefaults(cfg.default);
-          options.setProviderConnectedIds([]);
-        } catch {
+        const nextClient = createClient(nextBaseUrl, directory);
+
+        // Run connection operations in parallel with Promise.allSettled
+        // Each wrapped in try/catch so individual failures don't block
+        const [healthResult, sessionsResult, permissionsResult, providersResult] =
+          await Promise.allSettled([
+            waitForHealthy(nextClient, { timeoutMs: 5_000 }),
+            options.loadSessions(activeWorkspaceRoot().trim()),
+            options.refreshPendingPermissions(),
+            (async () => {
+              try {
+                const providerList = unwrap(await nextClient.provider.list());
+                return { success: true as const, providers: providerList.all, defaults: providerList.default, connected: providerList.connected };
+              } catch {
+                try {
+                  const cfg = unwrap(await nextClient.config.providers());
+                  return { success: true as const, providers: cfg.providers, defaults: cfg.default, connected: [] as string[] };
+                } catch {
+                  return { success: false as const, providers: [], defaults: {}, connected: [] as string[] };
+                }
+              }
+            })(),
+          ]);
+
+        // Handle health check result - this is critical, throw if failed
+        if (healthResult.status === "rejected") {
+          throw healthResult.reason;
+        }
+        const health = healthResult.value;
+        options.setClient(nextClient);
+        options.setConnectedVersion(health.version);
+        options.setBaseUrl(nextBaseUrl);
+
+        // Handle sessions result - non-critical, already handled in loadSessions
+        if (sessionsResult.status === "rejected") {
+          console.warn("Failed to load sessions:", sessionsResult.reason);
+        }
+
+        // Handle permissions result - non-critical, already handled in refreshPendingPermissions
+        if (permissionsResult.status === "rejected") {
+          console.warn("Failed to refresh permissions:", permissionsResult.reason);
+        }
+
+        // Handle providers result - may have fallback values
+        if (providersResult.status === "fulfilled") {
+          if (providersResult.value.success) {
+            options.setProviders(providersResult.value.providers as unknown as Provider[]);
+            options.setProviderDefaults(providersResult.value.defaults);
+            options.setProviderConnectedIds(providersResult.value.connected);
+          } else {
+            // Fallback to empty providers
+            options.setProviders([]);
+            options.setProviderDefaults({});
+            options.setProviderConnectedIds([]);
+          }
+        } else {
+          // Unexpected error in provider fetch
           options.setProviders([]);
           options.setProviderDefaults({});
           options.setProviderConnectedIds([]);
         }
-      }
 
-      options.setSelectedSessionId(null);
-      options.setMessages([]);
-      options.setTodos([]);
-      options.setPendingPermissions([]);
-      options.setSessionStatusById({});
+        options.setSelectedSessionId(null);
+        options.setMessages([]);
+        options.setTodos([]);
+        options.setPendingPermissions([]);
+        options.setSessionStatusById({});
 
-      try {
-        if (isTauriRuntime() && activeWorkspaceRoot().trim()) {
-          const wsRoot = activeWorkspaceRoot().trim();
-          const storedKey = `openwork.welcomeSessionCreated:${wsRoot}`;
+        try {
+          if (isTauriRuntime() && activeWorkspaceRoot().trim()) {
+            const wsRoot = activeWorkspaceRoot().trim();
+            const storedKey = `openwork.welcomeSessionCreated:${wsRoot}`;
 
-          let already = false;
-          try {
-            already = window.localStorage.getItem(storedKey) === "1";
-          } catch {
-            // ignore
-          }
-
-          if (!already) {
-            const session = unwrap(
-              await nextClient.session.create({ directory: wsRoot, title: "Welcome to OpenWork" }),
-            );
-            await nextClient.session.promptAsync({
-              directory: wsRoot,
-              sessionID: session.id,
-              model: options.defaultModel(),
-              variant: options.modelVariant() ?? undefined,
-              parts: [
-                {
-                  type: "text",
-                  text:
-                    "Give a short, welcoming overview of this workspace and how to use OpenWork. If a workspace guide skill is available, use it. Avoid CLI language or raw file paths. End with two friendly next actions to try inside OpenWork.",
-                },
-              ],
-            });
-
+            let already = false;
             try {
-              window.localStorage.setItem(storedKey, "1");
+              already = window.localStorage.getItem(storedKey) === "1";
             } catch {
               // ignore
             }
 
-            await options.loadSessions(activeWorkspaceRoot().trim()).catch(() => undefined);
+            if (!already) {
+              const session = unwrap(
+                await nextClient.session.create({ directory: wsRoot, title: "Welcome to OpenWork" }),
+              );
+              await nextClient.session.promptAsync({
+                directory: wsRoot,
+                sessionID: session.id,
+                model: options.defaultModel(),
+                variant: options.modelVariant() ?? undefined,
+                parts: [
+                  {
+                    type: "text",
+                    text:
+                      "Give a short, welcoming overview of this workspace and how to use OpenWork. If a workspace guide skill is available, use it. Avoid CLI language or raw file paths. End with two friendly next actions to try inside OpenWork.",
+                  },
+                ],
+              });
 
-            if (session?.id) {
               try {
-                await options.selectSession(session.id);
-                options.setView("session");
-                options.setTab("sessions");
+                window.localStorage.setItem(storedKey, "1");
               } catch {
-                // ignore selection failure
+                // ignore
+              }
+
+              await options.loadSessions(activeWorkspaceRoot().trim()).catch(() => undefined);
+
+              if (session?.id) {
+                try {
+                  await options.selectSession(session.id);
+                  options.setView("session");
+                  options.setTab("sessions");
+                } catch {
+                  // ignore selection failure
+                }
               }
             }
           }
+        } catch {
+          // ignore onboarding session failures
         }
-      } catch {
-        // ignore onboarding session failures
-      }
 
-      options.refreshSkills().catch(() => undefined);
-      if (!options.selectedSessionId()) {
-        options.setView("dashboard");
-        options.setTab("home");
+        options.refreshSkills().catch(() => undefined);
+        if (!options.selectedSessionId()) {
+          options.setView("dashboard");
+          options.setTab("home");
+        }
+        return true;
+      } catch (e) {
+        options.setClient(null);
+        options.setConnectedVersion(null);
+        const message = e instanceof Error ? e.message : safeStringify(e);
+        options.setError(addOpencodeCacheHint(message));
+        return false;
+      } finally {
+        options.setBusy(false);
+        options.setBusyLabel(null);
+        options.setBusyStartedAt(null);
       }
-      return true;
-    } catch (e) {
-      options.setClient(null);
-      options.setConnectedVersion(null);
-      const message = e instanceof Error ? e.message : safeStringify(e);
-      options.setError(addOpencodeCacheHint(message));
-      return false;
-    } finally {
-      options.setBusy(false);
-      options.setBusyLabel(null);
-      options.setBusyStartedAt(null);
-    }
+    });
   }
 
   async function createWorkspaceFlow(preset: WorkspacePreset, folder: string | null) {

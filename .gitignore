@@ -20,3 +20,7 @@ vendor/opencode/
 # OpenCode local deps
 .opencode/node_modules/
 .opencode/bun.lock
+
+# Build artifacts
+.build-pid
+build.log
