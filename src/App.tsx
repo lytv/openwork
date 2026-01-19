@@ -89,6 +89,7 @@ import {
   resetOpenworkState,
   resetOpencodeCache,
 } from "./lib/tauri";
+import { getArtifacts, clearArtifactCache } from "./lib/artifacts";
 
 
 export default function App() {
@@ -409,6 +410,40 @@ export default function App() {
 
   const artifacts = createMemo(() => deriveArtifacts(messages()));
   const workingFiles = createMemo(() => deriveWorkingFiles(artifacts()));
+
+  // Async artifacts computation using Computation Worker
+  const [computedArtifacts, setComputedArtifacts] = createSignal<Awaited<ReturnType<typeof getArtifacts>>>([]);
+
+  createEffect(async () => {
+    // Only compute for real mode, not demo mode
+    if (isDemoMode()) return;
+
+    const msgs = messages();
+    if (msgs.length === 0) {
+      setComputedArtifacts([]);
+      return;
+    }
+
+    try {
+      const result = await getArtifacts(msgs);
+      setComputedArtifacts(result);
+    } catch (error) {
+      console.error("Failed to compute artifacts:", error);
+      // Fall back to synchronous derivation
+      setComputedArtifacts([]);
+    }
+  });
+
+  // Clear artifact cache when selecting a new session
+  createEffect(() => {
+    const sessionId = selectedSessionId();
+    if (sessionId) {
+      // Clear the computation worker cache when switching sessions
+      clearArtifactCache().catch(() => {
+        // ignore errors
+      });
+    }
+  });
 
   const activeSessionId = createMemo(() => (isDemoMode() ? demoSelectedSessionId() : selectedSessionId()));
   const activeSessions = createMemo(() => (isDemoMode() ? demoSessions() : sessions()));
