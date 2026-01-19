@@ -1,0 +1,232 @@
+{
+  "project": "OpenWork Microservices Refactoring",
+  "branchName": "ralph/microservices-refactoring",
+  "description": "Refactor OpenWork from single-threaded to distributed architecture using Web Workers, Comlink, and parallel processing patterns",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Implement parallel connection flow",
+      "description": "As a user, I want connection operations to run in parallel so that I can connect to the server faster.",
+      "acceptanceCriteria": [
+        "waitForHealthy, loadSessions, refreshPermissions, and fetchProviders run concurrently via Promise.allSettled",
+        "Connection timeout reduced from 12s to 5s",
+        "Individual failures don't block successful requests (each wrapped in try/catch)",
+        "Debounce rapid connect attempts to prevent connection storms",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Add debounced scroll to message list",
+      "description": "As a user, I want smooth scrolling during AI streaming so that the UI doesn't jitter or lag.",
+      "acceptanceCriteria": [
+        "scrollToBottom function debounced at 100ms",
+        "Smooth scrolling behavior maintained",
+        "Typecheck passes",
+        "Verify in browser during active streaming"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Enable SolidJS batch updates for SSE events",
+      "description": "As a user, I want batched state updates during SSE streaming so that the UI only re-renders once per event batch.",
+      "acceptanceCriteria": [
+        "All SSE event handlers wrapped in batch() from solid-js",
+        "Multiple state updates (messages, todos, sessionStatus) happen in single render",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Add Comlink dependencies and Vite configuration",
+      "description": "As a developer, I need Comlink installed and configured so that I can use Web Workers with a clean RPC API.",
+      "acceptanceCriteria": [
+        "pnpm add comlink completes successfully",
+        "pnpm add -D vite-plugin-comlink completes successfully",
+        "Vite config updated with comlink plugin",
+        "Vite worker plugins configured",
+        "Typecheck passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Create SSE Worker for event stream processing",
+      "description": "As a developer, I need an SSE Worker that processes events off the main thread so that UI remains responsive during streaming.",
+      "acceptanceCriteria": [
+        "Worker created at src/workers/sse-worker.ts",
+        "Worker implements connect(), onBatch(), disconnect() methods",
+        "Events buffered and flushed every 16ms (60fps sync)",
+        "Events batched by type (messages, parts, sessions, todos, permissions)",
+        "Queue overflow handled with warning when events arrive faster than flush interval",
+        "Handle partial SSE events correctly (reassembly of split events)",
+        "Worker initialization wrapped in try/catch with error callback",
+        "Typecheck passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Create Computation Worker for heavy processing",
+      "description": "As a developer, I need a Computation Worker that handles artifact derivation and regex processing so that expensive computations don't block the UI.",
+      "acceptanceCriteria": [
+        "Worker created at src/workers/computation-worker.ts",
+        "Implements deriveArtifacts() with caching",
+        "Implements batchProcessParts() for batch processing",
+        "Implements clearCache() for cache management",
+        "Cache has max size limit (e.g., 1000 entries) with LRU eviction",
+        "Typecheck passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Create Worker Pool Manager",
+      "description": "As a developer, I need a Worker Pool Manager to manage worker lifecycle so that workers are lazily initialized and properly cleaned up.",
+      "acceptanceCriteria": [
+        "Worker pool created at src/lib/worker-pool.ts",
+        "initSSEWorker() returns Comlink-wrapped remote worker",
+        "initComputationWorker() returns Comlink-wrapped remote worker",
+        "terminate() cleans up all workers",
+        "Typecheck passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Integrate SSE Worker with session store",
+      "description": "As a user, I want SSE events processed via Worker so that streaming doesn't block my interactions.",
+      "acceptanceCriteria": [
+        "Session store (src/app/session.ts) initializes SSE Worker on connect",
+        "Worker batches events and sends to main thread via Comlink",
+        "Main thread uses batch() to process batched events",
+        "Worker disconnected on cleanup",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-009",
+      "title": "Integrate Computation Worker with message processing",
+      "description": "As a user, I want message artifact derivation to happen in a Worker so that message rendering stays smooth.",
+      "acceptanceCriteria": [
+        "Message processing calls Computation Worker via Comlink",
+        "Artifacts cached in worker to avoid redundant computation",
+        "Cache cleared on new session or manual trigger",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "Define Rust Command enum and processor",
+      "description": "As a backend developer, I need a Command pattern for Rust backend so that async operations can be queued and processed efficiently.",
+      "acceptanceCriteria": [
+        "Command enum defined in src-tauri/src/lib.rs with HealthCheck, LoadSessions, RefreshPermissions variants",
+        "CommandProcessor struct with new() and send() methods",
+        "One-shot channels for request-response patterns",
+        "Typecheck passes (Rust compilation)"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-011",
+      "title": "Implement command processing loop",
+      "description": "As a backend developer, I need a command processing loop so that queued commands are executed asynchronously.",
+      "acceptanceCriteria": [
+        "process_commands() async function spawned on app startup",
+        "Commands processed via Tauri async runtime",
+        "Response sent back via oneshot channel",
+        "Typecheck passes (Rust compilation)"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-012",
+      "title": "Add mpsc/broadcast channel support",
+      "description": "As a backend developer, I need proper channel infrastructure so that parallel command processing works correctly.",
+      "acceptanceCriteria": [
+        "mpsc channel configured with 100-element buffer",
+        "Broadcast channel for pub/sub events (optional)",
+        "Watch channel for single-sender multi-receiver patterns (optional)",
+        "Typecheck passes (Rust compilation)"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-013",
+      "title": "Add feature flags for gradual rollout",
+      "description": "As a developer, I need feature flags so that new features can be toggled without code changes.",
+      "acceptanceCriteria": [
+        "Feature flags file created at src/config/features.ts",
+        "Phase 1 features enabled: PARALLEL_CONNECTION, DEBOUNCED_SCROLL, BATCH_UPDATES",
+        "Phase 2 features disabled by default: SSE_WORKER, COMPUTATION_WORKER",
+        "Phase 3 features disabled by default: RUST_CHANNELS, SHARED_ARRAY_BUFFER",
+        "Typecheck passes"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-014",
+      "title": "Implement fallback for unavailable workers",
+      "description": "As a user, I want the app to work even if Workers are unavailable so that I can still use basic features.",
+      "acceptanceCriteria": [
+        "getSSEProcessor() checks for worker availability",
+        "Falls back to MainThreadSSEProcessor if workers unavailable",
+        "Cross-origin isolation check for SharedArrayBuffer",
+        "Typecheck passes",
+        "Verify fallback works in browser"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-015",
+      "title": "Create rollback procedure documentation",
+      "description": "As a developer, I need documented rollback procedures so that I can quickly disable features if issues arise.",
+      "acceptanceCriteria": [
+        "Emergency rollback documented in docs/rollback-procedure.md",
+        "Feature flags can disable all new features",
+        "Session store automatically falls back to main thread processing",
+        "Documentation includes steps for each phase"
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
