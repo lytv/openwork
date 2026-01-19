@@ -147,7 +147,7 @@
       "title": "Define Rust Command enum and processor",
       "description": "As a backend developer, I need a Command pattern for Rust backend so that async operations can be queued and processed efficiently.",
       "acceptanceCriteria": [
-        "Command enum defined in src-tauri/src/lib.rs with HealthCheck, LoadSessions, RefreshPermissions variants",
+        "Command enum defined in src-tauri/src/commands/command.rs with HealthCheck, LoadSessions, RefreshPermissions variants",
         "CommandProcessor struct with new() and send() methods",
         "One-shot channels for request-response patterns",
         "Typecheck passes (Rust compilation)"
@@ -211,7 +211,7 @@
         "Verify fallback works in browser"
       ],
       "priority": 14,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {

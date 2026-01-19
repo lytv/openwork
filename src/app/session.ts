@@ -21,7 +21,7 @@ import {
   upsertSession,
 } from "./utils";
 import { unwrap } from "../lib/opencode";
-import { getWorkerPool, cleanupWorkers } from "../lib/worker-pool";
+import { getSSEProcessor, type SSEProcessor } from "../lib/worker-pool";
 
 export type SessionModelState = {
   overrides: Record<string, ModelRef>;
@@ -368,13 +368,12 @@ export function createSessionStore(options: {
 
     (async () => {
       try {
-        const pool = getWorkerPool();
-        const sseWorker = await pool.initSSEWorker();
+        const processor = await getSSEProcessor();
 
-        await sseWorker.connect(
+        await processor.connect(
           () => c,
           processBatch,
-          (error) => {
+          (error: Error) => {
             if (!cancelled && !workerDisconnected) {
               const message = error instanceof Error ? error.message : String(error);
               options.setError(message);
@@ -392,13 +391,6 @@ export function createSessionStore(options: {
     onCleanup(() => {
       cancelled = true;
       workerDisconnected = true;
-      const pool = getWorkerPool();
-      const sseWorker = pool.getSSEWorker();
-      if (sseWorker) {
-        sseWorker.disconnect().catch(() => {
-          // ignore cleanup errors
-        });
-      }
     });
   });
 
