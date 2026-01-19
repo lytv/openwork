@@ -36,9 +36,9 @@ pub type CommandResult<T> = Result<T, String>;
 /// Command processor for handling queued commands
 pub struct CommandProcessor {
     /// Receiver channel for commands
-    receiver: mpsc::Receiver<Command>,
+    pub(crate) receiver: mpsc::Receiver<Command>,
     /// Sender channel for sending commands
-    sender: mpsc::Sender<Command>,
+    pub(crate) sender: mpsc::Sender<Command>,
 }
 
 impl CommandProcessor {
@@ -53,27 +53,10 @@ impl CommandProcessor {
         &self.sender
     }
 
-    /// Send a command and wait for response using one-shot channel
-    pub async fn send(&self, command: Command) -> CommandResult<CommandResponse> {
-        let (tx, rx) = oneshot::channel();
-
-        // Create a new command with our response channel
-        let cmd = match command {
-            Command::HealthCheck { .. } => Command::HealthCheck { response: tx },
-            Command::LoadSessions { .. } => Command::LoadSessions { response: tx },
-            Command::RefreshPermissions { .. } => Command::RefreshPermissions { response: tx },
-        };
-
-        self.sender.send(cmd).await.map_err(|e| e.to_string())?;
-
-        // Wait for response via one-shot channel and convert to CommandResponse
-        let result = rx.await.map_err(|e| e.to_string())?;
-        let response = match command {
-            Command::HealthCheck { .. } => CommandResponse::HealthCheck(result),
-            Command::LoadSessions { .. } => CommandResponse::LoadSessions(result),
-            Command::RefreshPermissions { .. } => CommandResponse::RefreshPermissions(result),
-        };
-        Ok(response)
+    /// Get ownership of receiver for spawning the processing loop
+    /// Returns the receiver and sender for reconstructing the processor
+    pub fn into_parts(self) -> (mpsc::Receiver<Command>, mpsc::Sender<Command>) {
+        (self.receiver, self.sender)
     }
 
     /// Process commands from the queue asynchronously

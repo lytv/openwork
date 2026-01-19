@@ -12,6 +12,7 @@ mod workspace;
 
 pub use types::*;
 
+use commands::command::CommandProcessor;
 use commands::config::{read_opencode_config, write_opencode_config};
 use commands::engine::{engine_doctor, engine_info, engine_install, engine_start, engine_stop};
 use commands::misc::{reset_opencode_cache, reset_openwork_state};
@@ -29,6 +30,9 @@ use commands::workspace::{
 };
 use engine::manager::EngineManager;
 
+/// Type alias for the command processor stored in Tauri state
+type CommandProcessorState = CommandProcessor;
+
 pub fn run() {
   let builder = tauri::Builder::default()
     .plugin(tauri_plugin_dialog::init())
@@ -38,6 +42,18 @@ pub fn run() {
   let builder = builder
     .plugin(tauri_plugin_process::init())
     .plugin(tauri_plugin_updater::Builder::new().build());
+
+  // Create command processor for managing async commands
+  let processor = CommandProcessor::new(100);
+
+  // Spawn the command processing loop on the Tokio runtime
+  // The loop runs asynchronously and processes commands from the queue via mpsc channel
+  // Responses are sent back via oneshot channels
+  let (receiver, sender) = processor.into_parts();
+  tokio::spawn(async move {
+    let mut proc = CommandProcessor { receiver, sender };
+    proc.process_commands().await;
+  });
 
   builder
     .manage(EngineManager::default())
