@@ -35,26 +35,17 @@ const defaultFlags: FeatureFlags = {
   SHARED_ARRAY_BUFFER: false,
 };
 
+// Runtime override storage (can be set by the app at runtime)
+let runtimeOverrides: Partial<FeatureFlags> = {};
+
 /**
  * Get current feature flags
- * Can be overridden by environment variables for testing
+ * Combines defaults with runtime overrides
  */
 export function getFeatureFlags(): FeatureFlags {
-  // Check for environment variable overrides
-  // Format: OPENWORK_FEATURE_NAME=true|false
-  const overrides: Partial<FeatureFlags> = {};
-
-  for (const key of Object.keys(defaultFlags) as Array<keyof FeatureFlags>) {
-    const envKey = `OPENWORK_FEATURE_${key}`;
-    const envValue = process.env[envKey];
-    if (envValue !== undefined) {
-      overrides[key] = envValue.toLowerCase() === "true";
-    }
-  }
-
   return {
     ...defaultFlags,
-    ...overrides,
+    ...runtimeOverrides,
   };
 }
 
@@ -77,6 +68,35 @@ export function getFeaturePhase(feature: keyof FeatureFlags): 1 | 2 | 3 {
     return 2;
   }
   return 3;
+}
+
+/**
+ * Override feature flags at runtime
+ * Useful for testing or user preferences
+ */
+export function setFeatureFlags(overrides: Partial<FeatureFlags>): void {
+  runtimeOverrides = { ...runtimeOverrides, ...overrides };
+}
+
+/**
+ * Reset all feature flags to defaults
+ */
+export function resetFeatureFlags(): void {
+  runtimeOverrides = {};
+}
+
+/**
+ * Enable a specific feature
+ */
+export function enableFeature(feature: keyof FeatureFlags): void {
+  runtimeOverrides[feature] = true;
+}
+
+/**
+ * Disable a specific feature
+ */
+export function disableFeature(feature: keyof FeatureFlags): void {
+  runtimeOverrides[feature] = false;
 }
 
 /**
