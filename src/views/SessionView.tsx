@@ -81,11 +81,23 @@ export type SessionViewProps = {
 
 export default function SessionView(props: SessionViewProps) {
   let messagesEndEl: HTMLDivElement | undefined;
+  let scrollDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  const SCROLL_DEBOUNCE_MS = 100;
+
+  const scrollToBottom = () => {
+    if (scrollDebounceTimer) {
+      clearTimeout(scrollDebounceTimer);
+    }
+    scrollDebounceTimer = setTimeout(() => {
+      messagesEndEl?.scrollIntoView({ behavior: "smooth" });
+      scrollDebounceTimer = null;
+    }, SCROLL_DEBOUNCE_MS);
+  };
 
   createEffect(() => {
     props.messages.length;
     props.todos.length;
-    messagesEndEl?.scrollIntoView({ behavior: "smooth" });
+    scrollToBottom();
   });
 
   const realTodos = createMemo(() => props.todos.filter((todo) => todo.content.trim()));
