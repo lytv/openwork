@@ -36,6 +36,7 @@ import {
   VARIANT_PREF_KEY,
 } from "./app/constants";
 import type {
+  ArtifactItem,
   Client,
   CuratedPackage,
   DashboardTab,
@@ -412,7 +413,7 @@ export default function App() {
   const workingFiles = createMemo(() => deriveWorkingFiles(artifacts()));
 
   // Async artifacts computation using Computation Worker
-  const [computedArtifacts, setComputedArtifacts] = createSignal<Awaited<ReturnType<typeof getArtifacts>>>([]);
+  const [computedArtifacts, setComputedArtifacts] = createSignal<ArtifactItem[]>([]);
 
   createEffect(async () => {
     // Only compute for real mode, not demo mode
@@ -426,7 +427,14 @@ export default function App() {
 
     try {
       const result = await getArtifacts(msgs);
-      setComputedArtifacts(result);
+      // Convert DerivedArtifact[] to ArtifactItem[] for UI consumption
+      const converted: ArtifactItem[] = result.map((artifact) => ({
+        id: `artifact-${artifact.name.replace(/[^a-zA-Z0-9]/g, "-")}`,
+        name: artifact.name,
+        path: artifact.kind === "file" ? artifact.content : undefined,
+        kind: artifact.kind,
+      }));
+      setComputedArtifacts(converted);
     } catch (error) {
       console.error("Failed to compute artifacts:", error);
       // Fall back to synchronous derivation
@@ -450,7 +458,7 @@ export default function App() {
   const activeSessionStatusById = createMemo(() => (isDemoMode() ? demoSessionStatusById() : sessionStatusById()));
   const activeMessages = createMemo(() => (isDemoMode() ? demoMessages() : messages()));
   const activeTodos = createMemo(() => (isDemoMode() ? demoTodos() : todos()));
-  const activeArtifacts = createMemo(() => (isDemoMode() ? demoArtifacts() : artifacts()));
+  const activeArtifacts = createMemo(() => (isDemoMode() ? demoArtifacts() : computedArtifacts()));
   const activeWorkingFiles = createMemo(() => (isDemoMode() ? demoWorkingFiles() : workingFiles()));
 
   const selectDemoSession = (sessionId: string) => {
