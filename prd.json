@@ -225,7 +225,7 @@
         "Documentation includes steps for each phase"
       ],
       "priority": 15,
-      "passes": false,
+      "passes": true,
       "notes": ""
     }
   ]
