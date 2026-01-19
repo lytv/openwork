@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { batch, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 
 import type { Message, Part, Session } from "@opencode-ai/sdk/v2/client";
 
@@ -158,159 +158,177 @@ export function createSessionStore(options: {
           const event = normalizeEvent(raw);
           if (!event) continue;
 
-          if (event.type === "server.connected") {
-            options.setSseConnected(true);
-          }
+          batch(() => {
+            if (event.type === "server.connected") {
+              options.setSseConnected(true);
+            }
 
-          if (options.developerMode()) {
-            setEvents((current) => {
-              const next = [{ type: event.type, properties: event.properties }, ...current];
-              return next.slice(0, 150);
-            });
-          }
+            if (options.developerMode()) {
+              setEvents((current) => {
+                const next = [{ type: event.type, properties: event.properties }, ...current];
+                return next.slice(0, 150);
+              });
+            }
+          });
 
-          if (event.type === "session.updated" || event.type === "session.created") {
-            if (event.properties && typeof event.properties === "object") {
-              const record = event.properties as Record<string, unknown>;
-              if (record.info && typeof record.info === "object") {
-                setSessions((current) => upsertSession(current, record.info as Session));
+          batch(() => {
+            if (event.type === "session.updated" || event.type === "session.created") {
+              if (event.properties && typeof event.properties === "object") {
+                const record = event.properties as Record<string, unknown>;
+                if (record.info && typeof record.info === "object") {
+                  setSessions((current) => upsertSession(current, record.info as Session));
+                }
               }
             }
-          }
+          });
 
-          if (event.type === "session.deleted") {
-            if (event.properties && typeof event.properties === "object") {
-              const record = event.properties as Record<string, unknown>;
-              const info = record.info as Session | undefined;
-              if (info?.id) {
-                setSessions((current) => current.filter((s) => s.id !== info.id));
+          batch(() => {
+            if (event.type === "session.deleted") {
+              if (event.properties && typeof event.properties === "object") {
+                const record = event.properties as Record<string, unknown>;
+                const info = record.info as Session | undefined;
+                if (info?.id) {
+                  setSessions((current) => current.filter((s) => s.id !== info.id));
+                }
               }
             }
-          }
+          });
 
-          if (event.type === "session.status") {
-            if (event.properties && typeof event.properties === "object") {
-              const record = event.properties as Record<string, unknown>;
-              const sessionID = typeof record.sessionID === "string" ? record.sessionID : null;
-              if (sessionID) {
-                setSessionStatusById((current) => ({
-                  ...current,
-                  [sessionID]: normalizeSessionStatus(record.status),
-                }));
-              }
-            }
-          }
-
-          if (event.type === "session.idle") {
-            if (event.properties && typeof event.properties === "object") {
-              const record = event.properties as Record<string, unknown>;
-              const sessionID = typeof record.sessionID === "string" ? record.sessionID : null;
-              if (sessionID) {
-                setSessionStatusById((current) => ({
-                  ...current,
-                  [sessionID]: "idle",
-                }));
-              }
-            }
-          }
-
-          if (event.type === "message.updated") {
-            if (event.properties && typeof event.properties === "object") {
-              const record = event.properties as Record<string, unknown>;
-              if (record.info && typeof record.info === "object") {
-                const info = record.info as Message;
-
-                const model = modelFromUserMessage(info);
-                if (model) {
-                  options.setSessionModelState((current) => ({
-                    overrides: current.overrides,
-                    resolved: { ...current.resolved, [info.sessionID]: model },
+          batch(() => {
+            if (event.type === "session.status") {
+              if (event.properties && typeof event.properties === "object") {
+                const record = event.properties as Record<string, unknown>;
+                const sessionID = typeof record.sessionID === "string" ? record.sessionID : null;
+                if (sessionID) {
+                  setSessionStatusById((current) => ({
+                    ...current,
+                    [sessionID]: normalizeSessionStatus(record.status),
                   }));
-
-                  options.setSessionModelState((current) => {
-                    if (!current.overrides[info.sessionID]) return current;
-                    const copy = { ...current.overrides };
-                    delete copy[info.sessionID];
-                    return { ...current, overrides: copy };
-                  });
-                }
-
-                if (options.selectedSessionId() && info.sessionID === options.selectedSessionId()) {
-                  setMessages((current) => upsertMessage(current, info));
                 }
               }
             }
-          }
+          });
 
-          if (event.type === "message.removed") {
-            if (event.properties && typeof event.properties === "object") {
-              const record = event.properties as Record<string, unknown>;
-              if (
-                options.selectedSessionId() &&
-                record.sessionID === options.selectedSessionId() &&
-                typeof record.messageID === "string"
-              ) {
-                setMessages((current) => current.filter((m) => m.info.id !== record.messageID));
+          batch(() => {
+            if (event.type === "session.idle") {
+              if (event.properties && typeof event.properties === "object") {
+                const record = event.properties as Record<string, unknown>;
+                const sessionID = typeof record.sessionID === "string" ? record.sessionID : null;
+                if (sessionID) {
+                  setSessionStatusById((current) => ({
+                    ...current,
+                    [sessionID]: "idle",
+                  }));
+                }
               }
             }
-          }
+          });
 
-          if (event.type === "message.part.updated") {
-            if (event.properties && typeof event.properties === "object") {
-              const record = event.properties as Record<string, unknown>;
-              if (record.part && typeof record.part === "object") {
-                const part = record.part as Part;
-                if (options.selectedSessionId() && part.sessionID === options.selectedSessionId()) {
-                  setMessages((current) => {
-                    const next = upsertPart(current, part);
+          batch(() => {
+            if (event.type === "message.updated") {
+              if (event.properties && typeof event.properties === "object") {
+                const record = event.properties as Record<string, unknown>;
+                if (record.info && typeof record.info === "object") {
+                  const info = record.info as Message;
 
-                    if (typeof record.delta === "string" && record.delta && part.type === "text") {
-                      const msgIdx = next.findIndex((m) => m.info.id === part.messageID);
-                      if (msgIdx !== -1) {
-                        const msg = next[msgIdx];
-                        const parts = msg.parts.slice();
-                        const pIdx = parts.findIndex((p) => p.id === part.id);
-                        if (pIdx !== -1) {
-                          const currentPart = parts[pIdx] as any;
-                          if (typeof currentPart.text === "string" && currentPart.text.endsWith(record.delta) === false) {
-                            parts[pIdx] = { ...(parts[pIdx] as any), text: `${currentPart.text}${record.delta}` };
-                            const copy = next.slice();
-                            copy[msgIdx] = { ...msg, parts };
-                            return copy;
+                  const model = modelFromUserMessage(info);
+                  if (model) {
+                    options.setSessionModelState((current) => ({
+                      overrides: current.overrides,
+                      resolved: { ...current.resolved, [info.sessionID]: model },
+                    }));
+
+                    options.setSessionModelState((current) => {
+                      if (!current.overrides[info.sessionID]) return current;
+                      const copy = { ...current.overrides };
+                      delete copy[info.sessionID];
+                      return { ...current, overrides: copy };
+                    });
+                  }
+
+                  if (options.selectedSessionId() && info.sessionID === options.selectedSessionId()) {
+                    setMessages((current) => upsertMessage(current, info));
+                  }
+                }
+              }
+            }
+          });
+
+          batch(() => {
+            if (event.type === "message.removed") {
+              if (event.properties && typeof event.properties === "object") {
+                const record = event.properties as Record<string, unknown>;
+                if (
+                  options.selectedSessionId() &&
+                  record.sessionID === options.selectedSessionId() &&
+                  typeof record.messageID === "string"
+                ) {
+                  setMessages((current) => current.filter((m) => m.info.id !== record.messageID));
+                }
+              }
+            }
+          });
+
+          batch(() => {
+            if (event.type === "message.part.updated") {
+              if (event.properties && typeof event.properties === "object") {
+                const record = event.properties as Record<string, unknown>;
+                if (record.part && typeof record.part === "object") {
+                  const part = record.part as Part;
+                  if (options.selectedSessionId() && part.sessionID === options.selectedSessionId()) {
+                    setMessages((current) => {
+                      const next = upsertPart(current, part);
+
+                      if (typeof record.delta === "string" && record.delta && part.type === "text") {
+                        const msgIdx = next.findIndex((m) => m.info.id === part.messageID);
+                        if (msgIdx !== -1) {
+                          const msg = next[msgIdx];
+                          const parts = msg.parts.slice();
+                          const pIdx = parts.findIndex((p) => p.id === part.id);
+                          if (pIdx !== -1) {
+                            const currentPart = parts[pIdx] as any;
+                            if (typeof currentPart.text === "string" && currentPart.text.endsWith(record.delta) === false) {
+                              parts[pIdx] = { ...(parts[pIdx] as any), text: `${currentPart.text}${record.delta}` };
+                              const copy = next.slice();
+                              copy[msgIdx] = { ...msg, parts };
+                              return copy;
+                            }
                           }
                         }
                       }
-                    }
 
-                    return next;
-                  });
+                      return next;
+                    });
+                  }
                 }
               }
             }
-          }
+          });
 
-          if (event.type === "message.part.removed") {
-            if (event.properties && typeof event.properties === "object") {
-              const record = event.properties as Record<string, unknown>;
-              const sessionID = typeof record.sessionID === "string" ? record.sessionID : null;
-              const messageID = typeof record.messageID === "string" ? record.messageID : null;
-              const partID = typeof record.partID === "string" ? record.partID : null;
+          batch(() => {
+            if (event.type === "message.part.removed") {
+              if (event.properties && typeof event.properties === "object") {
+                const record = event.properties as Record<string, unknown>;
+                const sessionID = typeof record.sessionID === "string" ? record.sessionID : null;
+                const messageID = typeof record.messageID === "string" ? record.messageID : null;
+                const partID = typeof record.partID === "string" ? record.partID : null;
 
-              if (sessionID && options.selectedSessionId() && sessionID === options.selectedSessionId() && messageID && partID) {
-                setMessages((current) => removePart(current, messageID, partID));
+                if (sessionID && options.selectedSessionId() && sessionID === options.selectedSessionId() && messageID && partID) {
+                  setMessages((current) => removePart(current, messageID, partID));
+                }
               }
             }
-          }
 
-          if (event.type === "todo.updated") {
-            const id = options.selectedSessionId();
-            if (id && event.properties && typeof event.properties === "object") {
-              const record = event.properties as Record<string, unknown>;
-              if (record.sessionID === id && Array.isArray(record.todos)) {
-                setTodos(record.todos as any);
+            if (event.type === "todo.updated") {
+              const id = options.selectedSessionId();
+              if (id && event.properties && typeof event.properties === "object") {
+                const record = event.properties as Record<string, unknown>;
+                if (record.sessionID === id && Array.isArray(record.todos)) {
+                  setTodos(record.todos as any);
+                }
               }
             }
-          }
+          });
 
           if (event.type === "permission.asked" || event.type === "permission.replied") {
             try {
