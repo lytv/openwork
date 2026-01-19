@@ -21,7 +21,7 @@ import {
   upsertSession,
 } from "./utils";
 import { unwrap } from "../lib/opencode";
-import { getSSEProcessor, type SSEProcessor } from "../lib/worker-pool";
+import { getWorkerPool, type SSEProcessor } from "../lib/worker-pool";
 
 export type SessionModelState = {
   overrides: Record<string, ModelRef>;
@@ -368,7 +368,8 @@ export function createSessionStore(options: {
 
     (async () => {
       try {
-        const processor = await getSSEProcessor();
+        const pool = getWorkerPool();
+        const processor = await pool.getSSEProcessor();
 
         await processor.connect(
           () => c,
