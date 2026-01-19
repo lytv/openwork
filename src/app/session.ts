@@ -21,6 +21,7 @@ import {
   upsertSession,
 } from "./utils";
 import { unwrap } from "../lib/opencode";
+import { getWorkerPool, cleanupWorkers } from "../lib/worker-pool";
 
 export type SessionModelState = {
   overrides: Record<string, ModelRef>;
@@ -145,212 +146,259 @@ export function createSessionStore(options: {
     const c = options.client();
     if (!c) return;
 
-    const controller = new AbortController();
     let cancelled = false;
+    let workerDisconnected = false;
 
-    (async () => {
-      try {
-        const sub = await c.event.subscribe(undefined, { signal: controller.signal });
+    // Process a single event from the worker
+    const processEvent = (event: OpencodeEvent) => {
+      batch(() => {
+        if (event.type === "server.connected") {
+          options.setSseConnected(true);
+        }
 
-        for await (const raw of sub.stream) {
-          if (cancelled) break;
-
-          const event = normalizeEvent(raw);
-          if (!event) continue;
-
-          batch(() => {
-            if (event.type === "server.connected") {
-              options.setSseConnected(true);
-            }
-
-            if (options.developerMode()) {
-              setEvents((current) => {
-                const next = [{ type: event.type, properties: event.properties }, ...current];
-                return next.slice(0, 150);
-              });
-            }
+        if (options.developerMode()) {
+          setEvents((current) => {
+            const next = [{ type: event.type, properties: event.properties }, ...current];
+            return next.slice(0, 150);
           });
+        }
+      });
 
-          batch(() => {
-            if (event.type === "session.updated" || event.type === "session.created") {
-              if (event.properties && typeof event.properties === "object") {
-                const record = event.properties as Record<string, unknown>;
-                if (record.info && typeof record.info === "object") {
-                  setSessions((current) => upsertSession(current, record.info as Session));
-                }
-              }
-            }
-          });
-
-          batch(() => {
-            if (event.type === "session.deleted") {
-              if (event.properties && typeof event.properties === "object") {
-                const record = event.properties as Record<string, unknown>;
-                const info = record.info as Session | undefined;
-                if (info?.id) {
-                  setSessions((current) => current.filter((s) => s.id !== info.id));
-                }
-              }
-            }
-          });
-
-          batch(() => {
-            if (event.type === "session.status") {
-              if (event.properties && typeof event.properties === "object") {
-                const record = event.properties as Record<string, unknown>;
-                const sessionID = typeof record.sessionID === "string" ? record.sessionID : null;
-                if (sessionID) {
-                  setSessionStatusById((current) => ({
-                    ...current,
-                    [sessionID]: normalizeSessionStatus(record.status),
-                  }));
-                }
-              }
-            }
-          });
-
-          batch(() => {
-            if (event.type === "session.idle") {
-              if (event.properties && typeof event.properties === "object") {
-                const record = event.properties as Record<string, unknown>;
-                const sessionID = typeof record.sessionID === "string" ? record.sessionID : null;
-                if (sessionID) {
-                  setSessionStatusById((current) => ({
-                    ...current,
-                    [sessionID]: "idle",
-                  }));
-                }
-              }
-            }
-          });
-
-          batch(() => {
-            if (event.type === "message.updated") {
-              if (event.properties && typeof event.properties === "object") {
-                const record = event.properties as Record<string, unknown>;
-                if (record.info && typeof record.info === "object") {
-                  const info = record.info as Message;
-
-                  const model = modelFromUserMessage(info);
-                  if (model) {
-                    options.setSessionModelState((current) => ({
-                      overrides: current.overrides,
-                      resolved: { ...current.resolved, [info.sessionID]: model },
-                    }));
-
-                    options.setSessionModelState((current) => {
-                      if (!current.overrides[info.sessionID]) return current;
-                      const copy = { ...current.overrides };
-                      delete copy[info.sessionID];
-                      return { ...current, overrides: copy };
-                    });
-                  }
-
-                  if (options.selectedSessionId() && info.sessionID === options.selectedSessionId()) {
-                    setMessages((current) => upsertMessage(current, info));
-                  }
-                }
-              }
-            }
-          });
-
-          batch(() => {
-            if (event.type === "message.removed") {
-              if (event.properties && typeof event.properties === "object") {
-                const record = event.properties as Record<string, unknown>;
-                if (
-                  options.selectedSessionId() &&
-                  record.sessionID === options.selectedSessionId() &&
-                  typeof record.messageID === "string"
-                ) {
-                  setMessages((current) => current.filter((m) => m.info.id !== record.messageID));
-                }
-              }
-            }
-          });
-
-          batch(() => {
-            if (event.type === "message.part.updated") {
-              if (event.properties && typeof event.properties === "object") {
-                const record = event.properties as Record<string, unknown>;
-                if (record.part && typeof record.part === "object") {
-                  const part = record.part as Part;
-                  if (options.selectedSessionId() && part.sessionID === options.selectedSessionId()) {
-                    setMessages((current) => {
-                      const next = upsertPart(current, part);
-
-                      if (typeof record.delta === "string" && record.delta && part.type === "text") {
-                        const msgIdx = next.findIndex((m) => m.info.id === part.messageID);
-                        if (msgIdx !== -1) {
-                          const msg = next[msgIdx];
-                          const parts = msg.parts.slice();
-                          const pIdx = parts.findIndex((p) => p.id === part.id);
-                          if (pIdx !== -1) {
-                            const currentPart = parts[pIdx] as any;
-                            if (typeof currentPart.text === "string" && currentPart.text.endsWith(record.delta) === false) {
-                              parts[pIdx] = { ...(parts[pIdx] as any), text: `${currentPart.text}${record.delta}` };
-                              const copy = next.slice();
-                              copy[msgIdx] = { ...msg, parts };
-                              return copy;
-                            }
-                          }
-                        }
-                      }
-
-                      return next;
-                    });
-                  }
-                }
-              }
-            }
-          });
-
-          batch(() => {
-            if (event.type === "message.part.removed") {
-              if (event.properties && typeof event.properties === "object") {
-                const record = event.properties as Record<string, unknown>;
-                const sessionID = typeof record.sessionID === "string" ? record.sessionID : null;
-                const messageID = typeof record.messageID === "string" ? record.messageID : null;
-                const partID = typeof record.partID === "string" ? record.partID : null;
-
-                if (sessionID && options.selectedSessionId() && sessionID === options.selectedSessionId() && messageID && partID) {
-                  setMessages((current) => removePart(current, messageID, partID));
-                }
-              }
-            }
-
-            if (event.type === "todo.updated") {
-              const id = options.selectedSessionId();
-              if (id && event.properties && typeof event.properties === "object") {
-                const record = event.properties as Record<string, unknown>;
-                if (record.sessionID === id && Array.isArray(record.todos)) {
-                  setTodos(record.todos as any);
-                }
-              }
-            }
-          });
-
-          if (event.type === "permission.asked" || event.type === "permission.replied") {
-            try {
-              await refreshPendingPermissions();
-            } catch {
-              // ignore
+      batch(() => {
+        if (event.type === "session.updated" || event.type === "session.created") {
+          if (event.properties && typeof event.properties === "object") {
+            const record = event.properties as Record<string, unknown>;
+            if (record.info && typeof record.info === "object") {
+              setSessions((current) => upsertSession(current, record.info as Session));
             }
           }
         }
+      });
+
+      batch(() => {
+        if (event.type === "session.deleted") {
+          if (event.properties && typeof event.properties === "object") {
+            const record = event.properties as Record<string, unknown>;
+            const info = record.info as Session | undefined;
+            if (info?.id) {
+              setSessions((current) => current.filter((s) => s.id !== info.id));
+            }
+          }
+        }
+      });
+
+      batch(() => {
+        if (event.type === "session.status") {
+          if (event.properties && typeof event.properties === "object") {
+            const record = event.properties as Record<string, unknown>;
+            const sessionID = typeof record.sessionID === "string" ? record.sessionID : null;
+            if (sessionID) {
+              setSessionStatusById((current) => ({
+                ...current,
+                [sessionID]: normalizeSessionStatus(record.status),
+              }));
+            }
+          }
+        }
+      });
+
+      batch(() => {
+        if (event.type === "session.idle") {
+          if (event.properties && typeof event.properties === "object") {
+            const record = event.properties as Record<string, unknown>;
+            const sessionID = typeof record.sessionID === "string" ? record.sessionID : null;
+            if (sessionID) {
+              setSessionStatusById((current) => ({
+                ...current,
+                [sessionID]: "idle",
+              }));
+            }
+          }
+        }
+      });
+
+      batch(() => {
+        if (event.type === "message.updated") {
+          if (event.properties && typeof event.properties === "object") {
+            const record = event.properties as Record<string, unknown>;
+            if (record.info && typeof record.info === "object") {
+              const info = record.info as Message;
+
+              const model = modelFromUserMessage(info);
+              if (model) {
+                options.setSessionModelState((current) => ({
+                  overrides: current.overrides,
+                  resolved: { ...current.resolved, [info.sessionID]: model },
+                }));
+
+                options.setSessionModelState((current) => {
+                  if (!current.overrides[info.sessionID]) return current;
+                  const copy = { ...current.overrides };
+                  delete copy[info.sessionID];
+                  return { ...current, overrides: copy };
+                });
+              }
+
+              if (options.selectedSessionId() && info.sessionID === options.selectedSessionId()) {
+                setMessages((current) => upsertMessage(current, info));
+              }
+            }
+          }
+        }
+      });
+
+      batch(() => {
+        if (event.type === "message.removed") {
+          if (event.properties && typeof event.properties === "object") {
+            const record = event.properties as Record<string, unknown>;
+            if (
+              options.selectedSessionId() &&
+              record.sessionID === options.selectedSessionId() &&
+              typeof record.messageID === "string"
+            ) {
+              setMessages((current) => current.filter((m) => m.info.id !== record.messageID));
+            }
+          }
+        }
+      });
+
+      batch(() => {
+        if (event.type === "message.part.updated") {
+          if (event.properties && typeof event.properties === "object") {
+            const record = event.properties as Record<string, unknown>;
+            if (record.part && typeof record.part === "object") {
+              const part = record.part as Part;
+              if (options.selectedSessionId() && part.sessionID === options.selectedSessionId()) {
+                setMessages((current) => {
+                  const next = upsertPart(current, part);
+
+                  if (typeof record.delta === "string" && record.delta && part.type === "text") {
+                    const msgIdx = next.findIndex((m) => m.info.id === part.messageID);
+                    if (msgIdx !== -1) {
+                      const msg = next[msgIdx];
+                      const parts = msg.parts.slice();
+                      const pIdx = parts.findIndex((p) => p.id === part.id);
+                      if (pIdx !== -1) {
+                        const currentPart = parts[pIdx] as any;
+                        if (typeof currentPart.text === "string" && currentPart.text.endsWith(record.delta) === false) {
+                          parts[pIdx] = { ...(parts[pIdx] as any), text: `${currentPart.text}${record.delta}` };
+                          const copy = next.slice();
+                          copy[msgIdx] = { ...msg, parts };
+                          return copy;
+                        }
+                      }
+                    }
+                  }
+
+                  return next;
+                });
+              }
+            }
+          }
+        }
+      });
+
+      batch(() => {
+        if (event.type === "message.part.removed") {
+          if (event.properties && typeof event.properties === "object") {
+            const record = event.properties as Record<string, unknown>;
+            const sessionID = typeof record.sessionID === "string" ? record.sessionID : null;
+            const messageID = typeof record.messageID === "string" ? record.messageID : null;
+            const partID = typeof record.partID === "string" ? record.partID : null;
+
+            if (sessionID && options.selectedSessionId() && sessionID === options.selectedSessionId() && messageID && partID) {
+              setMessages((current) => removePart(current, messageID, partID));
+            }
+          }
+        }
+
+        if (event.type === "todo.updated") {
+          const id = options.selectedSessionId();
+          if (id && event.properties && typeof event.properties === "object") {
+            const record = event.properties as Record<string, unknown>;
+            if (record.sessionID === id && Array.isArray(record.todos)) {
+              setTodos(record.todos as any);
+            }
+          }
+        }
+      });
+
+      if (event.type === "permission.asked" || event.type === "permission.replied") {
+        refreshPendingPermissions().catch(() => {
+          // ignore
+        });
+      }
+    };
+
+    // Process batched events from worker
+    const processBatch = (batched: {
+      messages: OpencodeEvent[];
+      parts: OpencodeEvent[];
+      sessions: OpencodeEvent[];
+      todos: OpencodeEvent[];
+      permissions: OpencodeEvent[];
+      other: OpencodeEvent[];
+    }) => {
+      // Process all events in batch for optimal performance
+      for (const event of batched.sessions) {
+        if (cancelled) break;
+        processEvent(event);
+      }
+      for (const event of batched.messages) {
+        if (cancelled) break;
+        processEvent(event);
+      }
+      for (const event of batched.parts) {
+        if (cancelled) break;
+        processEvent(event);
+      }
+      for (const event of batched.todos) {
+        if (cancelled) break;
+        processEvent(event);
+      }
+      for (const event of batched.permissions) {
+        if (cancelled) break;
+        processEvent(event);
+      }
+      for (const event of batched.other) {
+        if (cancelled) break;
+        processEvent(event);
+      }
+    };
+
+    (async () => {
+      try {
+        const pool = getWorkerPool();
+        const sseWorker = await pool.initSSEWorker();
+
+        await sseWorker.connect(
+          () => c,
+          processBatch,
+          (error) => {
+            if (!cancelled && !workerDisconnected) {
+              const message = error instanceof Error ? error.message : String(error);
+              options.setError(message);
+            }
+          }
+        );
       } catch (e) {
         if (cancelled) return;
 
         const message = e instanceof Error ? e.message : String(e);
-        if (message.toLowerCase().includes("abort")) return;
-
         options.setError(message);
       }
     })();
 
     onCleanup(() => {
       cancelled = true;
-      controller.abort();
+      workerDisconnected = true;
+      const pool = getWorkerPool();
+      const sseWorker = pool.getSSEWorker();
+      if (sseWorker) {
+        sseWorker.disconnect().catch(() => {
+          // ignore cleanup errors
+        });
+      }
     });
   });
 
