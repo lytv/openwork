@@ -153,7 +153,7 @@
         "Typecheck passes (Rust compilation)"
       ],
       "priority": 10,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
