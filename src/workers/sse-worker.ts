@@ -1,6 +1,7 @@
 import type { Client } from "../app/types";
 import type { OpencodeEvent } from "../app/types";
 import type { Event } from "@opencode-ai/sdk/v2/client";
+import { expose } from "comlink";
 
 /**
  * Batched event types for optimization
@@ -234,5 +235,9 @@ export class SSEWorker {
     return this.isRunning;
   }
 }
+
+// Expose the worker via Comlink for RPC
+const worker = new SSEWorker();
+expose(worker);
 
 export default SSEWorker;

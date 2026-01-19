@@ -1,4 +1,5 @@
 import type { Part, ToolPart, StepStartPart, StepFinishPart, ReasoningPart, TextPart, ToolStateCompleted } from "@opencode-ai/sdk/v2/client";
+import { expose } from "comlink";
 
 /**
  * Type guard for ToolStateCompleted
@@ -330,5 +331,9 @@ export class ComputationWorker {
     return hash.toString(36);
   }
 }
+
+// Expose the worker via Comlink for RPC
+const worker = new ComputationWorker();
+expose(worker);
 
 export default ComputationWorker;
